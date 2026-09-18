@@ -25,12 +25,22 @@ class EconomyConfig:
     earn_opt_in: float = 0.30
     seasons: int = 8
 
-    # Supply minted at token generation for liquidity, founder packs, and reserves.
-    genesis_supply: float = 5_000_000.0
+    # Supply circulating at token generation (liquidity, public sale unlock, etc.).
+    # Launchpad default: 12.6% of 1B, see docs/economy/TOKENOMICS.md.
+    genesis_supply: float = 126_000_000.0
 
-    # Emissions
-    base_emission_per_season: float = 1_000_000.0
-    # Emission scales with sqrt(population / initial) so per-player rewards taper.
+    # Rewards Vault (fixed-supply mode). Emissions are released from this pool
+    # under a per-season cap that decays each season. When the vault is empty,
+    # emissions stop. Set rewards_vault to 0 to fall back to unbounded minting.
+    rewards_vault: float = 400_000_000.0
+    vault_season_cap: float = 20_000_000.0
+    vault_cap_decay: float = 0.04
+
+    # Emissions actually paid out are the lesser of the season cap and demand-
+    # driven emission below. base_emission_per_season is the pool at initial
+    # population; it scales with sqrt(population / initial) so per-player
+    # rewards taper.
+    base_emission_per_season: float = 20_000_000.0
     emission_taper_exponent: float = 0.5
     # Fraction of a season's pool that goes unclaimed and returns to treasury.
     unclaimed_fraction: float = 0.08
@@ -42,7 +52,7 @@ class EconomyConfig:
     upkeep_burn: float = 0.02
 
     # Demand proxy: tokens each earn-enabled player wants to hold or spend per season.
-    demand_per_earner: float = 40.0
+    demand_per_earner: float = 1_000.0
 
     # Vesting: payouts unlock over this many seasons (1 = immediate).
     vesting_seasons: int = 1
@@ -62,12 +72,23 @@ class SeasonResult:
     treasury: float
     price_index: float
     per_earner_reward: float
+    vault_remaining: float = 0.0
+    season_cap: float = 0.0
+    vault_constrained: bool = False  # Emission was cut because the vault ran low.
 
 
 @dataclass
 class SimulationReport:
     config: EconomyConfig
     seasons: list[SeasonResult] = field(default_factory=list)
+
+    @property
+    def vault_exhausted_season(self) -> int | None:
+        """First season in which the vault could not fund the full emission."""
+        for s in self.seasons:
+            if s.vault_constrained:
+                return s.season
+        return None
 
     @property
     def max_inflation(self) -> float:
@@ -109,6 +130,8 @@ def simulate(config: EconomyConfig) -> SimulationReport:
     players = float(config.initial_players)
     circulating = config.genesis_supply
     treasury = 0.0
+    vault = config.rewards_vault
+    fixed_supply = config.rewards_vault > 0
     pending_vest: list[float] = []
 
     for season in range(1, config.seasons + 1):
@@ -116,9 +139,22 @@ def simulate(config: EconomyConfig) -> SimulationReport:
 
         scale = (players / config.initial_players) ** config.emission_taper_exponent
         pool = _noisy(config.base_emission_per_season * scale, rng, config.noise)
+
+        season_cap = 0.0
+        vault_constrained = False
+        if fixed_supply:
+            season_cap = config.vault_season_cap * (1 - config.vault_cap_decay) ** (season - 1)
+            wanted = min(pool, season_cap)
+            vault_constrained = vault < wanted
+            pool = min(wanted, vault)
+            vault -= pool
+
         unclaimed = pool * config.unclaimed_fraction
         claimed = pool - unclaimed
-        treasury += unclaimed
+        if fixed_supply:
+            vault += unclaimed  # Unclaimed allowance stays in the vault.
+        else:
+            treasury += unclaimed
 
         # Vesting spreads this season's claimed rewards over future seasons.
         pending_vest.append(claimed)
@@ -153,6 +189,9 @@ def simulate(config: EconomyConfig) -> SimulationReport:
                 treasury=treasury,
                 price_index=price_index,
                 per_earner_reward=released / earners if earners else 0.0,
+                vault_remaining=vault,
+                season_cap=season_cap,
+                vault_constrained=vault_constrained,
             )
         )
 

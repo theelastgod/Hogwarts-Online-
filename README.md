@@ -8,8 +8,8 @@ Third-person open-world wizarding RPG with a play-to-earn economy. See [DEVELOPM
 |---|---|
 | `docs/` | Design docs, economy model notes, legal checklists |
 | `game/` | Unreal Engine 5 project (see `game/README.md` for setup) |
-| `services/ledger/` | Go double-entry economy ledger with emission caps and vesting |
-| `contracts/` | Solidity contracts for WGLD and tradable items |
+| `services/ledger/` | Go double-entry economy ledger with emission caps, vesting, withdrawals, and a chain-agnostic settlement worker |
+| `contracts/` | Solidity contracts: fixed-supply WGLD, Rewards Vault with per-season caps, tradable items |
 | `tools/economy_sim/` | Python simulation of token emissions, sinks, and price stability |
 | `infra/` | Kubernetes, Terraform, and CI configuration |
 
@@ -28,4 +28,4 @@ cd tools/economy_sim && python3 -m pytest
 
 ## Status
 
-Phase 0 (Discovery). Current work: economy model, ledger core, contract skeletons, legal rights checklist.
+Phase 1 (Pre-production). WGLD launches via launchpad with a fixed supply; see `docs/economy/TOKENOMICS.md`. Current work: fixed-supply economy model, ledger with withdrawals and settlement, vault and token contracts, launchpad readiness checklist.

@@ -1,18 +1,21 @@
 # Contracts
 
-Solidity contracts for the on-chain layer. Target: an EVM Layer 2 (Base, Arbitrum, or Polygon), chosen in Phase 1.
+Solidity contracts for the on-chain layer. The chain is set by the launchpad; these target any EVM chain. If the launchpad is on a non-EVM chain, the same design is ported and the settlement adapter in `services/ledger/settlement` changes.
 
 | Contract | Standard | Purpose |
 |---|---|---|
-| `WizardingGold.sol` | ERC-20, pausable, role-gated | WGLD token with per-season mint caps and a hard max supply |
-| `WizardingItems.sol` | ERC-1155, ERC-2981 | Tradable rare items minted only after in-game burn, with royalties |
+| `WizardingGold.sol` | ERC-20, burnable, permit | Fixed 1B supply minted once at TGE. No mint, no owner, no pause. |
+| `RewardsVault.sol` | AccessControl, Pausable | Holds the 40% rewards allocation; releases to the settlement wallet under decaying per-season caps that can only be lowered. |
+| `WizardingItems.sol` | ERC-1155, ERC-2981 | Tradable rare items minted only after in-game burn, with royalties. |
+
+Vesting for team, investors, public sale, and treasury uses audited off-the-shelf vesting contracts (OpenZeppelin `VestingWallet` per beneficiary) deployed by the TGE script. They are not custom code.
 
 ## Design rules
 
-- The internal ledger in `services/ledger` is the source of truth. Contracts only mirror settled state.
-- Season caps on-chain match the ledger's caps and can only be lowered once set.
-- Every privileged function is behind a role. Admin should be a multisig with a timelock before mainnet.
-- No upgradeable proxies in v1. If upgradeability is needed, use a timelocked proxy and document the rationale.
+- The internal ledger in `services/ledger` is the source of truth for player balances. On-chain settlement is withdrawal-only.
+- The RewardsVault season cap mirrors the ledger's season cap. Both decay 4% per 90-day season from 20M.
+- Every privileged function is behind a role. Admin must be a timelocked multisig before TGE.
+- No upgradeable proxies. Launchpad due diligence expects an immutable token.
 
 ## Build
 
@@ -26,4 +29,4 @@ forge test
 
 ## Audit
 
-Two independent audits are required before mainnet (see DEVELOPMENT_PLAN.md, Phase 2). Store reports in `contracts/audits/`.
+Two independent audits are required before TGE. Store reports in `contracts/audits/`.

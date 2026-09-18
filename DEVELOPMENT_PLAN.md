@@ -75,7 +75,7 @@ Players create a witch or wizard, get sorted, and progress through years at Hogw
 | Sickles of Merit | Bound reputation points | House contributions, events | Ranks, titles, class access |
 | Wizarding Gold (WGLD) | Tradable premium token, on-chain | Ranked play, seasonal leagues, rare crafting, tournaments | Marketplace fees, minting, breeding, guild hall upkeep |
 
-WGLD emission is capped per season and split across activity pools. A pool that goes unclaimed rolls back into the treasury. Emissions taper as the player base grows to keep per-token value stable.
+**Launchpad decision (2026-09-18):** WGLD launches through a launchpad with a fixed supply of 1B minted at TGE. Seasonal rewards are released from a 400M Rewards Vault under per-season caps that decay 4% per 90-day season from 20M, and can only be lowered. Unclaimed allowance stays in the vault. Full allocation, vesting, and the launchpad readiness checklist are in `docs/economy/TOKENOMICS.md`.
 
 ### 3.3 Tradable Assets
 
@@ -102,9 +102,10 @@ WGLD emission is capped per season and split across activity pools. A pool that 
 ### 3.6 Blockchain Approach
 
 - Custodial wallets by default so players never touch seed phrases. Optional external wallet linking.
-- Layer 2 EVM chain (Base, Arbitrum, or Polygon) for low fees. Abstract the chain behind an internal ledger so it can change.
-- On-chain writes are batched and asynchronous. Gameplay never blocks on the chain.
-- Smart contracts audited by two independent firms before mainnet.
+- The chain is set by the launchpad. The internal ledger and settlement worker are chain-agnostic; only the settlement adapter changes.
+- On-chain settlement is withdrawal-only and batched. Gameplay never blocks on the chain.
+- Token is immutable after TGE: no mint, no owner, no pause. The Rewards Vault and item contracts carry the admin roles, behind a timelocked multisig.
+- Smart contracts audited by two independent firms before TGE.
 
 ### 3.7 Regulatory
 
@@ -206,7 +207,7 @@ WGLD emission is capped per season and split across activity pools. A pool that 
 
 - Open beta on PC at Month 28 with a wipe-free economy preview under strict caps.
 - Console beta at Month 30.
-- Mainnet launch of WGLD at Month 31, game launch at Month 33.
+- Launchpad TGE for WGLD at Month 31 (fixed supply, vault and vesting live), game launch at Month 33. If the launchpad requires an earlier TGE, the vault's season caps stay at zero until the game launches, so no rewards release before there is a game to earn them in.
 - Launch gates: crash-free rate above 99.5 percent, economy inflation within model bounds for 30 days, zero critical audit findings.
 
 ### Phase 4: Live Operations (Month 34 onward)

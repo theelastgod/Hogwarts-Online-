@@ -115,3 +115,43 @@ func TestBurnReducesCirculating(t *testing.T) {
 		t.Fatalf("entries = %d, want 2", n)
 	}
 }
+
+func TestWithdrawalEscrowSettleAndFail(t *testing.T) {
+	l, _ := newTest(1_000_000, 0)
+	l.Emit("s1", "player:alice", 100, "ranked", "")
+
+	w, err := l.RequestWithdrawal("player:alice", "0xA", 60)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a, _ := l.Balance("player:alice"); a != 40 {
+		t.Fatalf("alice = %d, want 40", a)
+	}
+	if e, _ := l.Balance(WithdrawalEscrowAccount); e != 60 {
+		t.Fatalf("escrow = %d, want 60", e)
+	}
+	if c := l.Circulating(); c != 100 {
+		t.Fatalf("circulating with escrow = %d, want 100", c)
+	}
+
+	if err := l.MarkSettled(w.ID, "0xtx"); err != nil {
+		t.Fatal(err)
+	}
+	if c := l.Circulating(); c != 40 {
+		t.Fatalf("circulating after settle = %d, want 40", c)
+	}
+	if err := l.MarkSettled(w.ID, "0xtx"); !errors.Is(err, ErrWithdrawalState) {
+		t.Fatalf("double settle should fail, got %v", err)
+	}
+
+	w2, _ := l.RequestWithdrawal("player:alice", "0xA", 40)
+	if err := l.MarkFailed(w2.ID, "rpc"); err != nil {
+		t.Fatal(err)
+	}
+	if a, _ := l.Balance("player:alice"); a != 40 {
+		t.Fatalf("alice after refund = %d, want 40", a)
+	}
+	if _, err := l.RequestWithdrawal("player:alice", "0xA", 41); !errors.Is(err, ErrInsufficientFunds) {
+		t.Fatalf("overdraw withdrawal should fail, got %v", err)
+	}
+}

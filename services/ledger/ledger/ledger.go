@@ -32,7 +32,34 @@ const (
 	TreasuryAccount AccountID = "sys:treasury"
 	// BurnAccount is a sink; balances here are removed from circulation.
 	BurnAccount AccountID = "sys:burn"
+	// WithdrawalEscrowAccount holds funds awaiting on-chain settlement.
+	WithdrawalEscrowAccount AccountID = "sys:withdrawal-escrow"
+	// SettledAccount holds funds that now live on-chain and are no longer
+	// custodial. Balances here are excluded from Circulating().
+	SettledAccount AccountID = "sys:settled"
 )
+
+// WithdrawalStatus tracks a withdrawal through settlement.
+type WithdrawalStatus uint8
+
+const (
+	WithdrawalPending WithdrawalStatus = iota
+	WithdrawalSettled
+	WithdrawalFailed
+)
+
+// Withdrawal is a request to move custodial WGLD on-chain.
+type Withdrawal struct {
+	ID          uint64
+	Account     AccountID
+	ChainAddr   string
+	Amount      Amount
+	Status      WithdrawalStatus
+	TxHash      string
+	RequestedAt time.Time
+}
+
+var ErrWithdrawalState = errors.New("ledger: withdrawal not in expected state")
 
 var (
 	ErrInsufficientFunds = errors.New("ledger: insufficient funds")
@@ -84,6 +111,9 @@ type Ledger struct {
 	emitted  map[string]Amount // season -> emitted so far
 	vesting  []*VestingSchedule
 	now      func() time.Time
+
+	withdrawals    map[uint64]*Withdrawal
+	nextWithdrawal uint64
 }
 
 // New creates a ledger with the system accounts opened.
@@ -94,11 +124,115 @@ func New(cfg Config) *Ledger {
 		emitted:  map[string]Amount{},
 		nextID:   1,
 		now:      time.Now,
+
+		withdrawals:    map[uint64]*Withdrawal{},
+		nextWithdrawal: 1,
 	}
-	for _, a := range []AccountID{EmissionAccount, TreasuryAccount, BurnAccount} {
+	for _, a := range []AccountID{EmissionAccount, TreasuryAccount, BurnAccount, WithdrawalEscrowAccount, SettledAccount} {
 		l.balances[a] = 0
 	}
 	return l
+}
+
+// RequestWithdrawal moves funds from a player account into escrow and records
+// a pending withdrawal for the settlement worker to push on-chain.
+func (l *Ledger) RequestWithdrawal(from AccountID, chainAddr string, amt Amount) (Withdrawal, error) {
+	if amt <= 0 {
+		return Withdrawal{}, ErrInvalidAmount
+	}
+	if chainAddr == "" {
+		return Withdrawal{}, errors.New("ledger: chain address required")
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	w := &Withdrawal{
+		ID:          l.nextWithdrawal,
+		Account:     from,
+		ChainAddr:   chainAddr,
+		Amount:      amt,
+		Status:      WithdrawalPending,
+		RequestedAt: l.now(),
+	}
+	_, err := l.postLocked("withdrawal escrow", fmt.Sprintf("withdrawal:%d", w.ID),
+		Posting{Account: from, Credit: amt},
+		Posting{Account: WithdrawalEscrowAccount, Debit: amt},
+	)
+	if err != nil {
+		return Withdrawal{}, err
+	}
+	l.nextWithdrawal++
+	l.withdrawals[w.ID] = w
+	return *w, nil
+}
+
+// PendingWithdrawals returns pending withdrawals in ID order, up to limit
+// (0 = all).
+func (l *Ledger) PendingWithdrawals(limit int) []Withdrawal {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var out []Withdrawal
+	for id := uint64(1); id < l.nextWithdrawal; id++ {
+		w := l.withdrawals[id]
+		if w != nil && w.Status == WithdrawalPending {
+			out = append(out, *w)
+			if limit > 0 && len(out) >= limit {
+				break
+			}
+		}
+	}
+	return out
+}
+
+// MarkSettled records that a withdrawal landed on-chain. Escrowed funds move
+// to the settled account and leave custodial circulation.
+func (l *Ledger) MarkSettled(id uint64, txHash string) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	w := l.withdrawals[id]
+	if w == nil || w.Status != WithdrawalPending {
+		return ErrWithdrawalState
+	}
+	_, err := l.postLocked("withdrawal settled", txHash,
+		Posting{Account: WithdrawalEscrowAccount, Credit: w.Amount},
+		Posting{Account: SettledAccount, Debit: w.Amount},
+	)
+	if err != nil {
+		return err
+	}
+	w.Status = WithdrawalSettled
+	w.TxHash = txHash
+	return nil
+}
+
+// MarkFailed returns escrowed funds to the player after a settlement failure.
+func (l *Ledger) MarkFailed(id uint64, reason string) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	w := l.withdrawals[id]
+	if w == nil || w.Status != WithdrawalPending {
+		return ErrWithdrawalState
+	}
+	_, err := l.postLocked("withdrawal failed: "+reason, fmt.Sprintf("withdrawal:%d", id),
+		Posting{Account: WithdrawalEscrowAccount, Credit: w.Amount},
+		Posting{Account: w.Account, Debit: w.Amount},
+	)
+	if err != nil {
+		return err
+	}
+	w.Status = WithdrawalFailed
+	return nil
+}
+
+// Withdrawal returns a copy of a withdrawal record.
+func (l *Ledger) Withdrawal(id uint64) (Withdrawal, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	w := l.withdrawals[id]
+	if w == nil {
+		return Withdrawal{}, false
+	}
+	return *w, true
 }
 
 // OpenAccount creates a player or system account with zero balance.
@@ -282,11 +416,12 @@ func (l *Ledger) Entries() []Entry {
 	return append([]Entry(nil), l.entries...)
 }
 
-// Circulating returns total supply held by non-system accounts.
+// Circulating returns custodial supply: player balances plus withdrawals in
+// escrow. Settled (on-chain) and burned balances are excluded.
 func (l *Ledger) Circulating() Amount {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	var total Amount
+	total := l.balances[WithdrawalEscrowAccount]
 	for id, b := range l.balances {
 		if !isSystem(id) {
 			total += b
